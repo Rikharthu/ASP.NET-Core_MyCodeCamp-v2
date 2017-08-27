@@ -1,17 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using AutoMapper;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MyCodeCamp.Data;
+using MyCodeCamp.Data.Entities;
 using Newtonsoft.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 
 namespace MyCodeCamp
 {
@@ -38,9 +44,38 @@ namespace MyCodeCamp
             services.AddDbContext<CampContext>(ServiceLifetime.Scoped);
             services.AddScoped<ICampRepository, CampRepository>();
             services.AddTransient<CampDbInitializer>();
+            services.AddTransient<CampIdentityInitializer>();
 
             services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
             services.AddAutoMapper();
+
+            services.AddIdentity<CampUser, IdentityRole>()
+                .AddEntityFrameworkStores<CampContext>(); // Context that contains the identity information
+            services.Configure<IdentityOptions>(config =>
+            {
+                config.Cookies.ApplicationCookie.Events =
+                    new CookieAuthenticationEvents()
+                    {
+                        // override default behavior that redirects unauthorized requests to login page
+                        OnRedirectToLogin = (ctx) =>
+                        {
+                            // Do not redirect to login page if this is existing API call
+                            if (ctx.Request.Path.StartsWithSegments("/api") && ctx.Response.StatusCode == 200)
+                            {
+                                ctx.Response.StatusCode = 401;
+                            }
+                            return Task.CompletedTask;
+                        },
+                        OnRedirectToAccessDenied = (ctx) =>
+                        {
+                            if (ctx.Request.Path.StartsWithSegments("/api") && ctx.Response.StatusCode == 200)
+                            {
+                                ctx.Response.StatusCode = 401;
+                            }
+                            return Task.CompletedTask;
+                        }
+                    };
+            });
 
             // Add framework services.
             // Add support to SSL by passing configuration lambda expression
@@ -60,7 +95,8 @@ namespace MyCodeCamp
 
                     // Looks and whether request comes on HTTP or HTTPS
                     // If it is HTTP, it will redirect to HTTPS using the same request
-                    options.Filters.Add(new RequireHttpsAttribute());
+                    //TODO FIXME Don't know why, but POST requests because of it!!!
+                    //options.Filters.Add(new RequireHttpsAttribute());
                 })
                 .AddJsonOptions(opt =>
                 {
@@ -73,10 +109,30 @@ namespace MyCodeCamp
         public void Configure(IApplicationBuilder app,
             IHostingEnvironment env,
             ILoggerFactory loggerFactory,
-            CampDbInitializer seeder)
+            CampDbInitializer seeder,
+            CampIdentityInitializer identitySeeder)
         {
             loggerFactory.AddConsole(_config.GetSection("Logging"));
             loggerFactory.AddDebug();
+
+            // Make Identity protect calls
+            // By default unauthorized requests will be redirected to /Accounts/Login with a Return URL Query parameters
+            // Trick to avoid: add header: X-Requested-With : XMLHttpRequest to get 401 code (simulate a call like from javascript)
+            app.UseIdentity();
+
+            app.UseJwtBearerAuthentication(new JwtBearerOptions()
+            {
+                AutomaticAuthenticate = true,
+                AutomaticChallenge = true,
+                TokenValidationParameters = new TokenValidationParameters()
+                {
+                    ValidIssuer = _config["Tokens:Issuer"],
+                    ValidAudience = _config["Tokens:Audience"],
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Tokens:Key"])),
+                    ValidateLifetime = true // Expiration date is not expired
+                }
+            });
 
             app.UseMvc(config =>
             {
@@ -84,6 +140,7 @@ namespace MyCodeCamp
             });
 
             seeder.Seed().Wait();
+            identitySeeder.Seed().Wait();
         }
     }
 }
