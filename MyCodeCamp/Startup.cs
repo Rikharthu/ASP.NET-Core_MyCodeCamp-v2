@@ -77,6 +77,11 @@ namespace MyCodeCamp
                     };
             });
 
+            services.AddAuthorization(config =>
+            {
+                config.AddPolicy("SuperUsers", policy => policy.RequireClaim("SuperUser", "True")); // Claim
+            });
+
             // Add framework services.
             // Add support to SSL by passing configuration lambda expression
             // which adds Https requirement to global filters

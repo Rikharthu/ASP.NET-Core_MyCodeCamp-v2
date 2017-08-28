@@ -14,6 +14,7 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
+using Newtonsoft.Json.Converters;
 
 namespace MyCodeCamp.Controllers
 {
@@ -79,24 +80,33 @@ namespace MyCodeCamp.Controllers
                     {
                         // Correct
 
+                        // Get claims provided by Identity (see CampIdentityInitializer.cs)
+                        var userClaims = await _userManager.GetClaimsAsync(user);
+
                         // Our JWT payload
                         var claims = new[]
                         {
                             new Claim(JwtRegisteredClaimNames.Sub, user.UserName), // subject of the token
-                            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()) // unique identifier
-                        };
+                            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()), // unique identifier
+                            new Claim(JwtRegisteredClaimNames.GivenName, user.FirstName),
+                            new Claim(JwtRegisteredClaimNames.FamilyName, user.LastName),
+                            new Claim(JwtRegisteredClaimNames.Email, user.Email)
+                        }.Union(userClaims);
 
-                        // TODO move somewhere else, this is for debug here (move to config or etc)
-                        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Tokens:Key"]));
+                        // Used to generate JWT Signature
+                        var key =
+                            new SymmetricSecurityKey(
+                                Encoding.UTF8.GetBytes(_config["Tokens:Key"])); // keep this key super-secret
                         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
                         // Create the token
                         var token = new JwtSecurityToken(
                             issuer: _config["Tokens:Issuer"], // iss claim (issuer of the token)
-                            audience: _config["Tokens:Audience"], // aud claim
+                            audience: _config[
+                                "Tokens:Audience"], // aud claim, audience that are recipients that JWT is intended for
                             claims: claims,
-                            expires: DateTime.UtcNow.AddMinutes(15),
-                            signingCredentials: creds
+                            expires: DateTime.UtcNow.AddMinutes(15), // JWT token expiration date
+                            signingCredentials: creds // signing credentials that are used to sign this token
                         );
 
                         return Ok(new

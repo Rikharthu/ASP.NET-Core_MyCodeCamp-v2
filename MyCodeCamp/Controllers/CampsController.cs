@@ -61,6 +61,7 @@ namespace MyCodeCamp.Controllers
             return BadRequest();
         }
 
+        [Authorize(Policy = "SuperUsers")] // allow only SuperUsers to post to camps
         [HttpPost]
         public async Task<IActionResult> Post([FromBody] CampModel model)
         {
