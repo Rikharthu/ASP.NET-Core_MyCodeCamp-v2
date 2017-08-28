@@ -17,7 +17,11 @@ using MyCodeCamp.Data;
 using MyCodeCamp.Data.Entities;
 using Newtonsoft.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc.Versioning;
+using Microsoft.AspNetCore.Mvc.Versioning.Conventions;
 using Microsoft.IdentityModel.Tokens;
+using MyCodeCamp.Controllers;
+using MyCodeCamp.Models;
 
 namespace MyCodeCamp
 {
@@ -49,6 +53,8 @@ namespace MyCodeCamp
             services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
             services.AddAutoMapper();
 
+            services.AddMemoryCache();
+
             services.AddIdentity<CampUser, IdentityRole>()
                 .AddEntityFrameworkStores<CampContext>(); // Context that contains the identity information
             services.Configure<IdentityOptions>(config =>
@@ -75,6 +81,52 @@ namespace MyCodeCamp
                             return Task.CompletedTask;
                         }
                     };
+            });
+
+
+            /*
+             * Versioning
+             * 
+             * URI Path
+             * https://foo.org/api/v2/customers
+             * 
+             * Query String (are optional)
+             * https://foo.org/api/v2/customers?v=2.0
+             * 
+             * Headers
+             * X-Version: 2.0
+             * 
+             * Accept Jeader
+             * Accept: application/json:version=2.0
+             * 
+             * Content Type Header
+             * Content-Type: application/vnd.yourapp.camp.v1+json
+             */
+            // After adding this to services, all calls by default require the foollowing query parameter:
+            // ?api-version=1.0
+            services.AddApiVersioning(config =>
+            {
+                // set default api-version to 1.1 (api-version=1.1)
+                config.DefaultApiVersion = new ApiVersion(1, 1); // Sets default api version to 1.1
+                config.AssumeDefaultVersionWhenUnspecified = true; // apply default version if none specified
+                config.ReportApiVersions = true; // Send the header that will tell about the available versions
+                // Configure API versioning methods (how api version is read and mapped to correct controller action
+                config.ApiVersionReader =
+                    new HeaderApiVersionReader("ver",
+                        "X-MyCodeCamp-Version"); // Header 'ver : 2.0' or 'X-MyCodeCamp-Version : 2.0'
+                // Default is Query
+                /* Also supported;
+                 * QueryStringOrHeaderApiVersionReader("ver")
+                 */
+
+                // Set up configuration conventions ( to avoid using annotation attributes)
+                // More info https://github.com/Microsoft/aspnet-api-versioning/wiki/API-Version-Conventions
+                config.Conventions.Controller<TalksController>()
+                    .HasApiVersion(new ApiVersion(1, 0))
+                    .HasApiVersion(new ApiVersion(1, 1))
+                    .HasApiVersion(new ApiVersion(2, 0))
+                    .Action(talksController => talksController.Post(default(string), default(int), default(TalkModel)))
+                    .MapToApiVersion(new ApiVersion(2, 0));
             });
 
             services.AddAuthorization(config =>

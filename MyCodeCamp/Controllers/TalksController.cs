@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using AutoMapper;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using MyCodeCamp.Data;
 using MyCodeCamp.Data.Entities;
@@ -20,12 +22,15 @@ namespace MyCodeCamp.Controllers
         private ILogger<TalksController> _logger;
         private IMapper _mapper;
         private ICampRepository _repo;
+        private IMemoryCache _cache;
 
-        public TalksController(ICampRepository repo, ILogger<TalksController> logger, IMapper mapper)
+        public TalksController(ICampRepository repo, ILogger<TalksController> logger, IMapper mapper,
+            IMemoryCache memoryCache)
         {
             _repo = repo;
             _logger = logger;
             _mapper = mapper;
+            _cache = memoryCache;
         }
 
         [HttpGet]
@@ -42,6 +47,16 @@ namespace MyCodeCamp.Controllers
         [HttpGet("{id}", Name = "GetTalk")]
         public IActionResult Get(string moniker, int speakerId, int id)
         {
+            // Check if caller uses 'If-None-Match' header with etag
+            if (Request.Headers.ContainsKey("If-None-Match"))
+            {
+                var oldETag = Request.Headers["If-None-Match"].First();
+                if (_cache.Get($"Talk-{id}-{oldETag}") != null)
+                {
+                    return StatusCode((int) HttpStatusCode.NotModified);
+                }
+            }
+
             var talk = _repo.GetTalk(id);
 
             if (talk.Speaker.Id != speakerId || talk.Speaker.Camp.Moniker != moniker)
@@ -49,6 +64,11 @@ namespace MyCodeCamp.Controllers
                 // speaker ID or camp MONIKER do not match for the given talk
                 return BadRequest("Invalid talk for the speaker selected");
             }
+
+            // Use RowVersion as etag, since it already tracks changes to DB
+            var etag = Convert.ToBase64String(talk.RowVersion);
+            Response.Headers.Add("ETag", etag);
+            _cache.Set($"Talk-{talk.Id}-{etag}", talk);
 
             return Ok(_mapper.Map<TalkModel>(talk));
         }
@@ -82,7 +102,7 @@ namespace MyCodeCamp.Controllers
             return BadRequest("Failed to save new talk");
         }
 
-        [HttpPut("{id}")]
+        [HttpPut("{id}",Name="UpdateTalk")]
         public async Task<IActionResult> Put(string moniker, int speakerId, int id, [FromBody] TalkModel model)
         {
             try
@@ -90,10 +110,21 @@ namespace MyCodeCamp.Controllers
                 var talk = _repo.GetTalk(id);
                 if (talk == null) return NotFound();
 
+                if (Request.Headers.ContainsKey("If-Match"))
+                {
+                    var etag = Request.Headers["If-Match"].First();
+                    if (etag == Convert.ToBase64String(talk.RowVersion))
+                    {
+                        // etags do not match, probably someone has already updated this value
+                        return StatusCode((int) HttpStatusCode.PreconditionFailed);
+                    }
+                }
+
                 _mapper.Map(model, talk);
 
                 if (await _repo.SaveAllAsync())
                 {
+                    AddETag(talk);
                     return Ok(_mapper.Map<TalkModel>(talk));
                 }
             }
@@ -103,6 +134,13 @@ namespace MyCodeCamp.Controllers
             }
 
             return BadRequest("Failed to update talk");
+        }
+
+        private void AddETag(Talk talk)
+        {
+            var etag = Convert.ToBase64String(talk.RowVersion);
+            Response.Headers.Add("ETag", etag);
+            _cache.Set($"Talk-{talk.Id}-{etag}", talk);
         }
 
         [HttpDelete("{id}")]
